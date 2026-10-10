@@ -11,8 +11,8 @@ import TheineCore
 
 extension MenuBarIcon {
     /// The cup in the menu bar: empty while the Mac may sleep, full while Theine keeps it awake. The drawing is the
-    /// family's glyph file (Glyph.swift, Theine.swift) and sets its own size (20 pt tall) and lines, so the template's
-    /// `box` is not used.
+    /// family's glyph file (Glyph.swift, Theine.swift) and sets its own size (20 pt wide, 15 pt tall) and lines, so the
+    /// template's `box` is not used.
     static func drawGlyph(in ctx: CGContext, box: CGRect, awake: Bool) {
         ctx.saveGState()
         Glyph.enterMenuBox(ctx, bounds: Theine.bounds, scale: max(1, abs(ctx.ctm.a)))

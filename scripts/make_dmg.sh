@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.1}"
 export VERSION
 # Release builds are signed with the family's self-signed certificate "tihomirov-nick": installed copies update
 # themselves only to a version signed by the same certificate. Without it the build is signed ad-hoc and the copies

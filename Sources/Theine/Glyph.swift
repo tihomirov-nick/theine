@@ -10,9 +10,12 @@
 //    tile is the body of the flat drawing (the 1024 square whose body is the squircle at 100...924, as in
 //    Subline/scripts/make_icon.swift). `enterIconMark` sets this up for the Icon Composer layer, where the body is the
 //    whole tile; lines `Glyph.iconLine` = 7.2 units.
-//  - menu bar: the ink is `menuMarkHeight` = 20 pt tall, centred on a canvas `menuCanvasHeight` = 22 pt tall (the 24 pt
-//    menu bar's own height is the frame of its items) and as wide as the mark's proportions ask, a margin on each side
-//    (`menuCanvas`); the status item is `variableLength`. Lines `Glyph.menuLine` = 8.23 units. `enterMenuBox` sets this up.
+//  - menu bar: the ink is as big as the system's own icons (Wi-Fi, Control Center, the input menu): `menuMarkHeight` =
+//    16 pt tall or, when its proportions would make it wider than `menuMarkMaxWidth` = 20 pt, 20 pt wide and as tall as
+//    they ask. It is centred on a canvas `menuCanvasHeight` = 22 pt tall (the 24 pt menu bar's own height is the frame
+//    of its items) and as wide as the ink plus a margin on each side (`menuCanvas`); the status item is `variableLength`.
+//    Lines `Glyph.menuLine` = 8.23 units and the gaps are counted in box units, so they shrink with the mark.
+//    `enterMenuBox` sets this up.
 import CoreGraphics
 
 enum Glyph {
@@ -23,29 +26,46 @@ enum Glyph {
     static let iconGap: CGFloat = 3.4
     static let menuGap: CGFloat = 4.2
 
-    /// The menu bar image, in points: the height of the ink, the height of the canvas and the room left on each side.
-    static let menuMarkHeight: CGFloat = 20
+    /// The menu bar image, in points: the height of the ink, the widest it may be, the height of the canvas and the room
+    /// left on each side.
+    static let menuMarkHeight: CGFloat = 16
+    static let menuMarkMaxWidth: CGFloat = 20
     static let menuCanvasHeight: CGFloat = 22
     static let menuMargin: CGFloat = 1
     /// How much of the tile's side the ink's longer side takes on the app icon; `iconBody` is the tile in the flat drawing.
     static let iconFill: CGFloat = 0.8
     static let iconBody: CGFloat = 824
 
-    /// Points per box unit in the menu bar for a mark whose ink is `bounds`.
-    static func menuScale(for bounds: CGRect) -> CGFloat { menuMarkHeight / bounds.height }
+    /// Points per box unit in the menu bar for a mark whose ink is `bounds`: `menuMarkHeight` tall, or as wide as
+    /// `menuMarkMaxWidth` when it would be wider than that.
+    static func menuScale(for bounds: CGRect) -> CGFloat {
+        min(menuMarkHeight / bounds.height, menuMarkMaxWidth / bounds.width)
+    }
+
+    /// The size of the ink in the menu bar, in points.
+    static func menuInk(for bounds: CGRect) -> CGSize {
+        let s = menuScale(for: bounds)
+        return CGSize(width: bounds.width * s, height: bounds.height * s)
+    }
 
     /// The menu bar canvas of a mark: 22 pt tall, as wide as the ink plus the margin on each side, in whole points.
     static func menuCanvas(for bounds: CGRect) -> CGSize {
-        CGSize(width: (bounds.width * menuScale(for: bounds) + 2 * menuMargin).rounded(.up), height: menuCanvasHeight)
+        CGSize(width: (menuInk(for: bounds).width + 2 * menuMargin).rounded(.up), height: menuCanvasHeight)
+    }
+
+    /// The ink in the middle of the canvas, in points, y down.
+    static func menuBox(for bounds: CGRect) -> CGRect {
+        let ink = menuInk(for: bounds), canvas = menuCanvas(for: bounds)
+        return CGRect(x: (canvas.width - ink.width) / 2, y: (canvas.height - ink.height) / 2,
+                      width: ink.width, height: ink.height)
     }
 
     /// Box units to points on the menu bar canvas, y down: the ink is centred, its left edge on a whole pixel of a screen
     /// of `scale` pixels per point, as FaceID's mark does.
     static func menuPlacement(bounds: CGRect, scale: CGFloat) -> CGAffineTransform {
-        let s = menuScale(for: bounds), canvas = menuCanvas(for: bounds)
-        let left = ((canvas.width - bounds.width * s) / 2 * scale).rounded() / scale
-        let top = (canvas.height - menuMarkHeight) / 2
-        return CGAffineTransform(translationX: left - bounds.minX * s, y: top - bounds.minY * s).scaledBy(x: s, y: s)
+        let s = menuScale(for: bounds), box = menuBox(for: bounds)
+        let left = (box.minX * scale).rounded() / scale
+        return CGAffineTransform(translationX: left - bounds.minX * s, y: box.minY - bounds.minY * s).scaledBy(x: s, y: s)
     }
 
     /// Pixels (of the flat drawing) per box unit on the app icon.
