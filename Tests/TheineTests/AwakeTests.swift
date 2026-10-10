@@ -2,7 +2,8 @@ import IOKit.pwr_mgt
 import XCTest
 @testable import TheineCore
 
-/// The mode, driven with a clock, a battery and a power assertion of its own: nothing here keeps the Mac awake.
+/// The mode, driven with a clock, a battery and a blocker of its own: nothing here keeps the Mac awake, apart from the
+/// few milliseconds of the tests under «The system».
 @MainActor
 final class AwakeTests: XCTestCase {
     /// The world around an `Awake`: the assertion, the store, the clock, the battery, the options, the boot of the Mac.
@@ -147,6 +148,50 @@ final class AwakeTests: XCTestCase {
         XCTAssertTrue(rig.blocker.isHeld)
     }
 
+    // MARK: The closed lid
+
+    func testTheClosedLidIsAskedForWithTheModeByDefault() {
+        let rig = Rig()
+        rig.awake.start(.unlimited)
+        XCTAssertEqual(rig.blocker.closedLidRequests, [true])
+        XCTAssertTrue(rig.blocker.holdsClosedLid)
+        rig.awake.stop()
+        XCTAssertFalse(rig.blocker.holdsClosedLid, "the request goes with the mode")
+    }
+
+    func testChangingTheClosedLidOptionWhileOnChangesWhatIsHeld() {
+        let rig = Rig()
+        rig.awake.start(.unlimited)
+        rig.options.keepsAwakeWithLidClosed = false
+        rig.awake.optionsChanged()
+        XCTAssertFalse(rig.blocker.holdsClosedLid)
+        XCTAssertTrue(rig.blocker.isHeld)
+        rig.awake.optionsChanged()
+        XCTAssertEqual(rig.blocker.closedLidRequests, [true, false], "the same options are not asked for twice")
+        XCTAssertTrue(rig.awake.isOn)
+    }
+
+    func testTheModeAsksAgainOnceTheHelperIsInstalled() {
+        let rig = Rig()
+        rig.awake.holdAgain()
+        XCTAssertEqual(rig.blocker.closedLidRequests, [], "nothing is held while the mode is off")
+        rig.awake.start(.minutes(30))
+        let session = rig.awake.session
+        rig.awake.holdAgain()
+        XCTAssertEqual(rig.blocker.closedLidRequests, [true, true])
+        XCTAssertEqual(rig.awake.session, session, "no new start")
+        XCTAssertEqual(rig.changes, 1)
+    }
+
+    func testARestoredSessionAsksForTheClosedLidToo() {
+        let rig = Rig()
+        rig.awake.start(.unlimited)
+        rig.awake.shutdown(forget: false)
+        XCTAssertFalse(rig.blocker.holdsClosedLid)
+        XCTAssertTrue(rig.makeAwake().restore())
+        XCTAssertTrue(rig.blocker.holdsClosedLid)
+    }
+
     // MARK: The restart
 
     func testASavedSessionComesBackAfterARestart() {
@@ -289,6 +334,56 @@ final class AwakeTests: XCTestCase {
         XCTAssertNil(rig.store.session)
     }
 
+    // MARK: The real timer
+
+    /// An `Awake` whose timer runs, every `poll` seconds; the run loop is turned by the test.
+    private func ticking(_ rig: Rig, poll: TimeInterval) -> Awake {
+        let awake = Awake(blocker: rig.blocker, store: rig.store, power: { [unowned rig] in rig.power },
+                          options: { [unowned rig] in rig.options }, now: { Date() }, boot: { [unowned rig] in rig.boot },
+                          schedulesTicks: true, pollInterval: poll)
+        awake.onFinish = { [unowned rig] in rig.finished.append($0) }
+        return awake
+    }
+
+    private func spin(until done: () -> Bool, seconds: TimeInterval = 3) {
+        let limit = Date().addingTimeInterval(seconds)
+        while !done(), Date() < limit { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+    }
+
+    func testTheTimerLooksEveryThirtySecondsWhileTheModeHasNoLimit() throws {
+        let rig = Rig()
+        let awake = Awake(blocker: rig.blocker, store: rig.store, power: { [unowned rig] in rig.power }, now: { Date() })
+        awake.start(.unlimited)
+        defer { awake.stop() }
+        let next = try XCTUnwrap(awake.nextLook)
+        XCTAssertEqual(next.timeIntervalSinceNow, Awake.pollInterval, accuracy: 1)
+        XCTAssertEqual(Awake.pollInterval, 30)
+    }
+
+    func testTheTimerEndsASessionWhoseTimeRunsOut() {
+        let rig = Rig()
+        let awake = ticking(rig, poll: 30)
+        awake.start(.limited(0.3))
+        spin { !awake.isOn }
+        XCTAssertFalse(awake.isOn)
+        XCTAssertEqual(rig.finished, [.expired])
+        XCTAssertFalse(rig.blocker.isHeld)
+    }
+
+    func testTheTimerEndsTheModeWhenTheBatteryRunsLow() {
+        let rig = Rig()
+        let awake = ticking(rig, poll: 0.2)
+        awake.start(.unlimited)
+        spin(until: { false }, seconds: 0.5)
+        XCTAssertTrue(awake.isOn, "the looks go on while the battery allows")
+        XCTAssertNotNil(awake.nextLook)
+        rig.power = PowerState(percent: 19, onBattery: true)
+        spin { !awake.isOn }
+        XCTAssertFalse(awake.isOn)
+        XCTAssertEqual(rig.finished, [.lowBattery])
+        XCTAssertNil(awake.nextLook, "no more looks once the mode is off")
+    }
+
     // MARK: Words
 
     func testTheStatusLine() {
@@ -333,8 +428,8 @@ final class AwakeTests: XCTestCase {
         ownAssertions().contains { $0["AssertType"] as? String == type && ($0["AssertName"] as? String)?.contains("Theine") == true }
     }
 
-    /// The one test that touches the Mac: the assertion lasts a few milliseconds.
-    func testThePowerAssertionIsSeenBySystemAndSwitchesWithTheDisplayOption() {
+    /// The assertions last a few milliseconds.
+    func testThePowerAssertionsAreSeenBySystemAndFollowTheDisplayOption() {
         let blocker = PowerAssertion()
         defer { blocker.release() }
         XCTAssertTrue(blocker.hold(display: false))
@@ -342,8 +437,15 @@ final class AwakeTests: XCTestCase {
         XCTAssertFalse(holds("PreventUserIdleDisplaySleep"))
         XCTAssertTrue(blocker.hold(display: true))
         XCTAssertTrue(holds("PreventUserIdleDisplaySleep"))
-        XCTAssertFalse(holds("PreventUserIdleSystemSleep"), "the first one went when the second held")
+        XCTAssertTrue(holds("PreventUserIdleSystemSleep"), "the system stays held while the display is added")
+        XCTAssertTrue(blocker.hold(display: true))
+        XCTAssertEqual(ownAssertions().filter { ($0["AssertName"] as? String)?.contains("Theine") == true }.count, 2,
+                       "each type is held once")
+        XCTAssertTrue(blocker.hold(display: false))
+        XCTAssertFalse(holds("PreventUserIdleDisplaySleep"))
+        XCTAssertTrue(holds("PreventUserIdleSystemSleep"))
         blocker.release()
+        XCTAssertFalse(holds("PreventUserIdleSystemSleep"))
         XCTAssertFalse(holds("PreventUserIdleDisplaySleep"))
     }
 

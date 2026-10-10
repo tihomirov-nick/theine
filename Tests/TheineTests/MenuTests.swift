@@ -4,16 +4,23 @@ import TheineCore
 @testable import Theine
 
 /// The menu of the icon, which is Theine's interface, and the two cups. Nothing here shows a menu or touches the menu
-/// bar: the items are built over a stand-in power assertion and a clock of the test's own.
+/// bar: the items are built over a stand-in blocker and a clock of the test's own.
 @MainActor
 final class MenuTests: XCTestCase {
     private final class Clock {
         var now = Date(timeIntervalSince1970: 1_800_000_000)
     }
 
+    /// No note about the closed lid: the helper is in place, or the user has not said no.
+    private let quiet = ClosedLidNote(isShown: false, isAsking: false, allow: {})
+
     private func makeAwake(_ clock: Clock = Clock()) -> Awake {
         Awake(blocker: StandInBlocker(), store: StandInStore(), power: { PowerState(percent: 80, onBattery: false) },
               options: { Awake.Options() }, now: { clock.now }, boot: { 1 }, schedulesTicks: false)
+    }
+
+    private func items(_ awake: Awake) -> [NSMenuItem] {
+        AppActions.menuItems(awake: awake, setKeepsDisplay: { _ in }, setKeepsAwakeWithLidClosed: { _ in }, closedLidNote: quiet)
     }
 
     /// What a click on the item does.
@@ -22,16 +29,19 @@ final class MenuTests: XCTestCase {
     }
 
     func testTheMenuAtRest() throws {
-        let items = AppActions.menuItems(awake: makeAwake())
-        XCTAssertEqual(items.map(\.title), ["Включить", "Не гасить экран", "Включить на", "", "Выключено"])
+        let items = items(makeAwake())
+        XCTAssertEqual(items.map(\.title),
+                       ["Включить", "Не гасить экран", "Не засыпать с закрытой крышкой", "Включить на", "", "Выключено"])
         // ⇧⌘T is a label: it works while the menu is open (a global shortcut is the user's own, see ShortcutTests).
         XCTAssertEqual(items[0].keyEquivalent, "t")
         XCTAssertEqual(items[0].keyEquivalentModifierMask, [.command, .shift])
         XCTAssertEqual(items[1].state, .off, "the display goes dark as usual until the flag is set")
         XCTAssertNotNil(items[1].toolTip)
-        XCTAssertTrue(items[3].isSeparatorItem)
-        XCTAssertFalse(items[4].isEnabled, "the status line does nothing")
-        let lengths = try XCTUnwrap(items[2].submenu)
+        XCTAssertEqual(items[2].state, .on, "the Mac stays awake with the lid closed unless the user says otherwise")
+        XCTAssertTrue(items[2].toolTip?.contains("в сумку") == true, "the tooltip warns about the heat in a bag")
+        XCTAssertTrue(items[4].isSeparatorItem)
+        XCTAssertFalse(items[5].isEnabled, "the status line does nothing")
+        let lengths = try XCTUnwrap(items[3].submenu)
         XCTAssertEqual(lengths.items.map(\.title),
                        ["Без ограничения", "5 минут", "15 минут", "30 минут", "1 час", "2 часа", "4 часа", "8 часов"])
         XCTAssertTrue(lengths.items.allSatisfy { $0.target != nil && $0.action != nil })
@@ -41,10 +51,10 @@ final class MenuTests: XCTestCase {
         let clock = Clock()
         let awake = makeAwake(clock)
         let expected: [TimeInterval?] = [nil, 300, 900, 1800, 3600, 7200, 14400, 28800]
-        let titles = try XCTUnwrap(AppActions.menuItems(awake: awake)[2].submenu).items.map(\.title)
+        let titles = try XCTUnwrap(items(awake)[3].submenu).items.map(\.title)
         for (index, seconds) in expected.enumerated() {
             // The menu is built anew at every click, as the icon does.
-            let lengths = try XCTUnwrap(AppActions.menuItems(awake: awake)[2].submenu)
+            let lengths = try XCTUnwrap(items(awake)[3].submenu)
             choose(lengths.items[index])
             XCTAssertTrue(awake.isOn, titles[index])
             XCTAssertEqual(awake.session?.ends, seconds.map { clock.now.addingTimeInterval($0) }, titles[index])
@@ -54,17 +64,18 @@ final class MenuTests: XCTestCase {
     func testTheFirstItemTurnsTheModeOnAndOff() {
         let clock = Clock()
         let awake = makeAwake(clock)
-        choose(AppActions.menuItems(awake: awake)[0])
+        choose(items(awake)[0])
         XCTAssertTrue(awake.isOn)
         XCTAssertNil(awake.session?.ends, "«Включить» has no time limit")
-        var items = AppActions.menuItems(awake: awake)
-        XCTAssertEqual(items.map(\.title), ["Выключить", "Не гасить экран", "Включить на", "", "Включено меньше минуты"])
+        var menu = items(awake)
+        XCTAssertEqual(menu.map(\.title), ["Выключить", "Не гасить экран", "Не засыпать с закрытой крышкой", "Включить на", "",
+                                           "Включено меньше минуты"])
         clock.now.addTimeInterval(12 * 60)
-        XCTAssertEqual(AppActions.menuItems(awake: awake).last?.title, "Включено 12 мин")
-        choose(items[0])
+        XCTAssertEqual(items(awake).last?.title, "Включено 12 мин")
+        choose(menu[0])
         XCTAssertFalse(awake.isOn)
-        items = AppActions.menuItems(awake: awake)
-        XCTAssertEqual(items.first?.title, "Включить")
+        menu = items(awake)
+        XCTAssertEqual(menu.first?.title, "Включить")
     }
 
     func testTheMenuShowsTheTimeLeft() {
@@ -72,72 +83,135 @@ final class MenuTests: XCTestCase {
         let awake = makeAwake(clock)
         awake.start(.hours(1))
         clock.now.addTimeInterval(20 * 60)
-        XCTAssertEqual(AppActions.menuItems(awake: awake).last?.title, "Осталось 40 мин")
+        XCTAssertEqual(items(awake).last?.title, "Осталось 40 мин")
     }
 
-    // MARK: The flag «Не гасить экран»
+    // MARK: The flags «Не гасить экран» and «Не засыпать с закрытой крышкой»
 
-    /// The flag with a stand-in for the preference it sets, and the blocker behind it.
-    @MainActor private final class Flag {
+    /// The flags with stand-ins for the preferences they set, and the blocker behind them.
+    @MainActor private final class Flags {
         var keepsDisplay = false
+        var keepsLidClosed = true
         let blocker = StandInBlocker()
         let clock = Clock()
+        var note = ClosedLidNote(isShown: false, isAsking: false, allow: {})
         lazy var awake = Awake(blocker: blocker, store: StandInStore(), power: { PowerState(percent: 80, onBattery: false) },
-                               options: { [unowned self] in Awake.Options(keepsDisplayOn: keepsDisplay) },
+                               options: { [unowned self] in
+                                   Awake.Options(keepsDisplayOn: keepsDisplay, keepsAwakeWithLidClosed: keepsLidClosed)
+                               },
                                now: { [unowned self] in clock.now }, boot: { 1 }, schedulesTicks: false)
 
         func items() -> [NSMenuItem] {
-            AppActions.menuItems(awake: awake, setKeepsDisplay: { [unowned self] in keepsDisplay = $0 })
+            AppActions.menuItems(awake: awake, setKeepsDisplay: { [unowned self] in keepsDisplay = $0 },
+                                 setKeepsAwakeWithLidClosed: { [unowned self] in keepsLidClosed = $0 }, closedLidNote: note)
         }
     }
 
-    func testTheFlagShowsTheSettingAndChangesIt() {
-        let flag = Flag()
-        XCTAssertEqual(flag.items()[1].title, "Не гасить экран")
-        XCTAssertEqual(flag.items()[1].state, .off)
-        choose(flag.items()[1])
-        XCTAssertTrue(flag.keepsDisplay)
-        XCTAssertEqual(flag.items()[1].state, .on, "the menu is built anew at every click and shows the setting")
-        choose(flag.items()[1])
-        XCTAssertFalse(flag.keepsDisplay)
-        XCTAssertEqual(flag.items()[1].state, .off)
-        XCTAssertFalse(flag.awake.isOn, "the flag does not turn the mode on")
-        XCTAssertEqual(flag.blocker.requests, [], "nothing is held while the mode is off")
+    func testTheDisplayFlagShowsTheSettingAndChangesIt() {
+        let flags = Flags()
+        XCTAssertEqual(flags.items()[1].title, "Не гасить экран")
+        XCTAssertEqual(flags.items()[1].state, .off)
+        choose(flags.items()[1])
+        XCTAssertTrue(flags.keepsDisplay)
+        XCTAssertEqual(flags.items()[1].state, .on, "the menu is built anew at every click and shows the setting")
+        choose(flags.items()[1])
+        XCTAssertFalse(flags.keepsDisplay)
+        XCTAssertEqual(flags.items()[1].state, .off)
+        XCTAssertFalse(flags.awake.isOn, "the flag does not turn the mode on")
+        XCTAssertEqual(flags.blocker.requests, [], "nothing is held while the mode is off")
     }
 
-    func testTheFlagChangesTheHeldAssertionAtOnceWhileTheModeIsOn() {
-        let flag = Flag()
-        flag.awake.start(.unlimited)
-        XCTAssertEqual(flag.blocker.requests, [false], "without the flag only the system is held: the display goes dark")
-        XCTAssertFalse(flag.blocker.holdsDisplay)
-        choose(flag.items()[1])
-        XCTAssertEqual(flag.blocker.requests, [false, true], "with the flag the display is held too, with no new start")
-        XCTAssertTrue(flag.blocker.holdsDisplay)
-        XCTAssertTrue(flag.awake.isOn)
-        choose(flag.items()[1])
-        XCTAssertEqual(flag.blocker.requests, [false, true, false])
-        XCTAssertFalse(flag.blocker.holdsDisplay)
-        XCTAssertTrue(flag.blocker.isHeld, "the system stays held either way")
+    func testTheDisplayFlagChangesWhatIsHeldAtOnceWhileTheModeIsOn() {
+        let flags = Flags()
+        flags.awake.start(.unlimited)
+        XCTAssertEqual(flags.blocker.requests, [false], "without the flag only the system is held: the display goes dark")
+        XCTAssertFalse(flags.blocker.holdsDisplay)
+        choose(flags.items()[1])
+        XCTAssertEqual(flags.blocker.requests, [false, true], "with the flag the display is held too, with no new start")
+        XCTAssertTrue(flags.blocker.holdsDisplay)
+        XCTAssertTrue(flags.awake.isOn)
+        choose(flags.items()[1])
+        XCTAssertEqual(flags.blocker.requests, [false, true, false])
+        XCTAssertFalse(flags.blocker.holdsDisplay)
+        XCTAssertTrue(flags.blocker.isHeld, "the system stays held either way")
     }
 
-    func testAModeStartedWithTheFlagSetHoldsTheDisplayFromTheStart() {
-        let flag = Flag()
-        flag.keepsDisplay = true
-        choose(flag.items()[0])
-        XCTAssertEqual(flag.blocker.requests, [true])
-        XCTAssertTrue(flag.blocker.holdsDisplay)
+    func testAModeStartedWithTheDisplayFlagSetHoldsTheDisplayFromTheStart() {
+        let flags = Flags()
+        flags.keepsDisplay = true
+        choose(flags.items()[0])
+        XCTAssertEqual(flags.blocker.requests, [true])
+        XCTAssertTrue(flags.blocker.holdsDisplay)
+    }
+
+    func testTheClosedLidFlagIsOnByDefaultAndAskedForWithTheMode() {
+        let flags = Flags()
+        choose(flags.items()[0])
+        XCTAssertEqual(flags.blocker.closedLidRequests, [true], "the helper is asked from the start")
+        XCTAssertTrue(flags.blocker.holdsClosedLid)
+    }
+
+    func testTheClosedLidFlagChangesWhatIsHeldAtOnceWhileTheModeIsOn() {
+        let flags = Flags()
+        flags.awake.start(.unlimited)
+        choose(flags.items()[2])
+        XCTAssertFalse(flags.keepsLidClosed)
+        XCTAssertEqual(flags.items()[2].state, .off)
+        XCTAssertEqual(flags.blocker.closedLidRequests, [true, false], "the request to the helper goes, with no new start")
+        XCTAssertFalse(flags.blocker.holdsClosedLid)
+        XCTAssertTrue(flags.blocker.isHeld, "the rest stays held")
+        choose(flags.items()[2])
+        XCTAssertEqual(flags.blocker.closedLidRequests, [true, false, true])
+        XCTAssertTrue(flags.blocker.holdsClosedLid)
+        XCTAssertEqual(flags.blocker.requests, [false, false, false], "the display flag stays as it was")
+    }
+
+    func testTheClosedLidFlagDoesNotTurnTheModeOn() {
+        let flags = Flags()
+        choose(flags.items()[2])
+        XCTAssertFalse(flags.keepsLidClosed)
+        XCTAssertFalse(flags.awake.isOn)
+        XCTAssertEqual(flags.blocker.closedLidRequests, [])
+    }
+
+    // MARK: The note after a «Не сейчас» to the password
+
+    func testAfterARefusalTheMenuSaysTheClosedLidDoesNotWorkAndOffersToAllow() {
+        let flags = Flags()
+        var allowed = 0
+        flags.note = ClosedLidNote(isShown: true, isAsking: false, allow: { allowed += 1 })
+        flags.awake.start(.unlimited)
+        let items = flags.items()
+        XCTAssertEqual(Array(items.map(\.title).suffix(3)),
+                       ["Включено меньше минуты", "С закрытой крышкой не действует", "Разрешить…"])
+        XCTAssertFalse(items[items.count - 2].isEnabled, "the note does nothing")
+        XCTAssertNotNil(items.last?.toolTip)
+        choose(items[items.count - 1])
+        XCTAssertEqual(allowed, 1, "«Разрешить…» asks for the password again")
+        XCTAssertTrue(flags.awake.isOn, "the mode runs without the helper all the same")
+    }
+
+    func testWhileThePasswordDialogIsOpenThereIsNothingToAllow() {
+        let flags = Flags()
+        flags.note = ClosedLidNote(isShown: true, isAsking: true, allow: {})
+        XCTAssertEqual(flags.items().last?.title, "С закрытой крышкой не действует")
     }
 
     func testTheMenuKeepsTheFamilyItemsAfterTheActions() {
-        let items = StatusItem.menu(actions: AppActions.menuItems(awake: makeAwake())).items
-        XCTAssertEqual(items.count, 5 + 1 + 5)
-        XCTAssertTrue(items[5].isSeparatorItem)
-        XCTAssertEqual(items[6].action, #selector(AppDelegate.showSettings(_:)))
+        let items = StatusItem.menu(actions: items(makeAwake())).items
+        XCTAssertEqual(items.count, 6 + 1 + 5)
+        XCTAssertTrue(items[6].isSeparatorItem)
+        XCTAssertEqual(items[7].action, #selector(AppDelegate.showSettings(_:)))
         XCTAssertEqual(items.last?.action, #selector(NSApplication.terminate(_:)))
     }
 
-    func testTheAppIsNeverBusy() {
-        XCTAssertFalse(AppActions.isBusy, "the mode is saved and comes back, so an update need not wait for it")
+    func testTheAppIsBusyOnlyWhileTheHelperHoldsTheClosedLid() {
+        XCTAssertTrue(AppActions.isBusy(modeIsOn: true, keepsAwakeWithLidClosed: true, helperInstalled: true),
+                      "a restart would let a Mac with its lid closed fall asleep: an update waits")
+        for (on, lid, helper) in [(false, true, true), (true, false, true), (true, true, false), (false, false, false)] {
+            XCTAssertFalse(AppActions.isBusy(modeIsOn: on, keepsAwakeWithLidClosed: lid, helperInstalled: helper),
+                           "the plain mode is saved and comes back, so an update need not wait for it: \(on) \(lid) \(helper)")
+        }
     }
 
     // MARK: The cups

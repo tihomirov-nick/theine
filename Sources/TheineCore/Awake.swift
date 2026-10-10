@@ -32,12 +32,13 @@ public enum AwakeStop: Equatable, Sendable {
     case lowBattery
 }
 
-/// Holds the Mac awake: the real one is `PowerAssertion`, previews and tests use `StandInBlocker`.
+/// Holds the Mac awake: the real one is `SystemSleepBlocker`, previews and tests use `StandInBlocker`.
 @MainActor
 public protocol SleepBlocker: AnyObject {
-    /// Keeps the Mac from idle sleep, and the display too when `display` is set; replaces what was held before. False
-    /// when the system refuses.
-    func hold(display: Bool) -> Bool
+    /// Keeps the Mac from idle sleep, the display too when `display` is set, and with `closedLid` asks the helper to keep
+    /// it awake with the lid closed as well; replaces what was held before. False when the system refuses the power
+    /// assertion. The helper is extra: without it the rest still holds.
+    func hold(display: Bool, closedLid: Bool) -> Bool
     func release()
 }
 
@@ -48,11 +49,11 @@ public protocol SessionStore: AnyObject {
     func save(_ session: AwakeSession?)
 }
 
-/// The mode «не давать Mac засыпать»: one session at a time, with or without a time limit. It holds the power assertion
-/// while the session lasts, saves the session at every change so that a restart picks it up (`restore`), and turns
-/// itself off when the time runs out or, if the option is on, when the battery runs low. Everything it takes from the
-/// world (the assertion, the store, the clock, the battery, the options) is passed in, so the tests drive it with a
-/// clock of their own.
+/// The mode «не давать Mac засыпать»: one session at a time, with or without a time limit. It holds the blocker while
+/// the session lasts, saves the session at every change so that a restart picks it up (`restore`), and turns itself off
+/// when the time runs out or, if the option is on, when the battery runs low. Everything it takes from the world (the
+/// blocker, the store, the clock, the battery, the options) is passed in, so the tests drive it with a clock of their
+/// own.
 @MainActor
 public final class Awake {
     public struct Options: Equatable, Sendable {
@@ -60,17 +61,20 @@ public final class Awake {
         public var keepsDisplayOn: Bool
         /// «Выключать при заряде ниже 20%».
         public var stopsOnLowBattery: Bool
+        /// «Не засыпать с закрытой крышкой»: the helper keeps SleepDisabled on while the mode runs.
+        public var keepsAwakeWithLidClosed: Bool
 
-        public init(keepsDisplayOn: Bool = false, stopsOnLowBattery: Bool = true) {
+        public init(keepsDisplayOn: Bool = false, stopsOnLowBattery: Bool = true, keepsAwakeWithLidClosed: Bool = true) {
             self.keepsDisplayOn = keepsDisplayOn
             self.stopsOnLowBattery = stopsOnLowBattery
+            self.keepsAwakeWithLidClosed = keepsAwakeWithLidClosed
         }
     }
 
     /// On battery, below this charge (in percent) the mode turns off and does not turn on.
-    public static let lowBatteryPercent = 20
+    public nonisolated static let lowBatteryPercent = 20
     /// How often a running session looks at the clock and the battery.
-    public static let pollInterval: TimeInterval = 30
+    public nonisolated static let pollInterval: TimeInterval = 30
 
     public private(set) var session: AwakeSession?
     /// Why the mode turned itself off last; cleared when it is turned on or off by hand.
@@ -87,27 +91,34 @@ public final class Awake {
     private let now: () -> Date
     private let boot: () -> TimeInterval
     private let schedulesTicks: Bool
+    private let poll: TimeInterval
     private var timer: Timer?
-    private var heldDisplay = false
+    /// What the blocker holds now, as the options asked for it; nil while nothing is held.
+    private var held: (display: Bool, closedLid: Bool)?
 
-    /// Without a `blocker` and a `store` the real ones are used: the power assertion and the app's preferences.
+    /// Without a `blocker` and a `store` the real ones are used: the power assertions with the helper behind them, and
+    /// the app's preferences. `pollInterval` is for the tests that watch the real timer.
     public init(blocker: SleepBlocker? = nil, store: SessionStore? = nil,
                 power: @escaping () -> PowerState = PowerSource.current, options: @escaping () -> Options = { Options() },
                 now: @escaping () -> Date = { Date() }, boot: @escaping () -> TimeInterval = SystemBoot.time,
-                schedulesTicks: Bool = true) {
-        self.blocker = blocker ?? PowerAssertion()
+                schedulesTicks: Bool = true, pollInterval: TimeInterval = Awake.pollInterval) {
+        self.blocker = blocker ?? SystemSleepBlocker()
         self.store = store ?? DefaultsSessionStore()
         self.power = power
         self.options = options
         self.now = now
         self.boot = boot
         self.schedulesTicks = schedulesTicks
+        self.poll = pollInterval
     }
 
     public var isOn: Bool { session != nil }
 
     /// «Не гасить экран» as the options give it now: while the mode is on, the display stays on too.
     public var keepsDisplayOn: Bool { options().keepsDisplayOn }
+
+    /// «Не засыпать с закрытой крышкой» as the options give it now.
+    public var keepsAwakeWithLidClosed: Bool { options().keepsAwakeWithLidClosed }
 
     /// The battery alone forbids the mode right now: the option is on, the Mac runs on battery and the charge is low.
     public var isBlockedByBattery: Bool {
@@ -164,12 +175,12 @@ public final class Awake {
         return true
     }
 
-    /// The app is quitting. The assertion goes with the process anyway; the saved session stays for the restart, unless
+    /// The app is quitting. What is held goes with the process anyway; the saved session stays for the restart, unless
     /// the user quit the app, which ends the mode for good.
     public func shutdown(forget: Bool) {
         cancelTimer()
         blocker.release()
-        heldDisplay = false
+        held = nil
         if forget { store.save(nil) }
     }
 
@@ -188,12 +199,19 @@ public final class Awake {
         }
     }
 
-    /// The options changed (the flag «Не гасить экран» in the menu, or Settings): the flag changes what is held at once,
-    /// the battery option may end the session.
+    /// The options changed (the flags in the menu, or Settings): «Не гасить экран» and «Не засыпать с закрытой крышкой»
+    /// change what is held at once, the battery option may end the session.
     public func optionsChanged() {
         guard isOn else { return }
-        if options().keepsDisplayOn != heldDisplay { _ = hold() }
+        let wanted = options()
+        if held?.display != wanted.keepsDisplayOn || held?.closedLid != wanted.keepsAwakeWithLidClosed { _ = hold() }
         if isBlockedByBattery { end(because: .lowBattery) }
+    }
+
+    /// The helper has just been installed: the running mode asks it at once, with no new start.
+    public func holdAgain() {
+        guard isOn else { return }
+        _ = hold()
     }
 
     // MARK: Words
@@ -223,9 +241,9 @@ public final class Awake {
 
     /// Holds what the options ask for; false when the system refuses.
     private func hold() -> Bool {
-        let display = options().keepsDisplayOn
-        guard blocker.hold(display: display) else { return false }
-        heldDisplay = display
+        let wanted = options()
+        guard blocker.hold(display: wanted.keepsDisplayOn, closedLid: wanted.keepsAwakeWithLidClosed) else { return false }
+        held = (wanted.keepsDisplayOn, wanted.keepsAwakeWithLidClosed)
         return true
     }
 
@@ -233,7 +251,7 @@ public final class Awake {
         session = nil
         lastStop = reason
         blocker.release()
-        heldDisplay = false
+        held = nil
         store.save(nil)
         cancelTimer()
         onChange?()
@@ -250,7 +268,7 @@ public final class Awake {
     private func schedule() {
         cancelTimer()
         guard schedulesTicks, let session else { return }
-        var interval = Self.pollInterval
+        var interval = poll
         if let ends = session.ends { interval = min(interval, max(ends.timeIntervalSince(now()), 0.5)) }
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -266,6 +284,9 @@ public final class Awake {
         timer = nil
     }
 
+    /// When the timer looks next; nil when it is not running.
+    var nextLook: Date? { timer?.fireDate }
+
     deinit {
         timer?.invalidate()
     }
@@ -276,28 +297,34 @@ public final class Awake {
 /// A blocker that holds nothing, for previews and tests: it remembers what it was asked.
 @MainActor
 public final class StandInBlocker: SleepBlocker {
-    /// Whether something is held now, and whether it includes the display.
+    /// Whether something is held now, and whether it includes the display and the closed lid.
     public private(set) var isHeld = false
     public private(set) var holdsDisplay = false
-    /// Every `hold(display:)` in order.
+    public private(set) var holdsClosedLid = false
+    /// The display flag of every `hold`, in order.
     public private(set) var requests: [Bool] = []
+    /// The closed-lid flag of every `hold`, in order.
+    public private(set) var closedLidRequests: [Bool] = []
     public private(set) var releases = 0
     /// The system says no.
     public var refuses = false
 
     public init() {}
 
-    public func hold(display: Bool) -> Bool {
+    public func hold(display: Bool, closedLid: Bool) -> Bool {
         requests.append(display)
+        closedLidRequests.append(closedLid)
         guard !refuses else { return false }
         isHeld = true
         holdsDisplay = display
+        holdsClosedLid = closedLid
         return true
     }
 
     public func release() {
         isHeld = false
         holdsDisplay = false
+        holdsClosedLid = false
         releases += 1
     }
 }

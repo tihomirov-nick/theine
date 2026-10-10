@@ -33,20 +33,33 @@ while the Mac may sleep and full while Theine keeps it awake.
 
 THE MENU BAR ICON
 Any click on the icon opens the menu. It has "Turn On" or "Turn Off" (the
-Shift-Command-T label on that item works while the menu is open), a "Keep the display on" checkmark
-and "Turn On For" with "Indefinitely", 5, 15, 30 minutes, 1, 2, 4 and 8 hours. While the mode is on
-and the checkmark is set, the display does not go dark from inactivity; without it the display goes
-dark as usual and the Mac keeps running. The checkmark takes effect at once, also while the mode
-is on. A line under them
-shows the state: "On for 12 min" or "40 min left". Then come Settings, Check
-for Updates, About and Quit.
+Shift-Command-T label on that item works while the menu is open), the
+"Keep the display on" and "Stay awake with the lid closed" checkmarks and
+"Turn On For" with "Indefinitely", 5, 15, 30 minutes, 1, 2, 4 and 8 hours.
+While the mode is on and "Keep the display on" is checked, the display
+doesn't dim or go dark and the screen saver doesn't start. Without it the
+display goes dark as usual and the Mac keeps running. The checkmarks take
+effect at once, also while the mode is on. A line under them shows the
+state: "On for 12 min" or "40 min left". Then come Settings, Check for
+Updates, About and Quit.
 
 When the time is up, Theine turns itself off and plays a short sound if sound
-effects are on in Settings. A closed MacBook lid and Sleep in the Apple menu
-still put the Mac to sleep.
+effects are on in Settings.
+
+THE CLOSED LID
+With "Stay awake with the lid closed" (checked from the start) the Mac
+doesn't sleep even with its lid closed, on battery and on power. For this
+Theine installs a small helper, and macOS asks for an administrator
+password once, the first time the mode is turned on. If you say no,
+everything else works, and the menu gets an "Allow…" item to install the
+helper later. With the lid closed the Mac runs warmer, so don't put it in
+a bag while Theine is on. When Theine is turned off or quits, the helper
+puts the sleep setting back within seconds.
 
 SETTINGS
-Settings (Command-,) has two switches for Theine and a row for a shortcut. "Turn off below 20% battery" turns Theine off when the Mac runs
+Settings (Command-,) has three switches for Theine and a row for a shortcut.
+"Stay awake with the lid closed" is the same as the checkmark in the menu.
+"Turn off below 20% battery" turns Theine off when the Mac runs
 on battery and the charge falls below 20%, and stops it from turning on at that
 charge until the Mac is plugged in. "Turn on at launch" turns Theine on with no
 time limit at every launch. The "Shortcut for turning on" row records your own
@@ -67,7 +80,9 @@ Language & Region. A new language takes effect after a restart, and the
 UPDATES
 Theine looks for a new version on GitHub at launch, every three hours and
 after the Mac wakes up. It downloads a new version by itself, checks its
-signature and installs it when Theine is idle. With "Install updates
+signature and installs it when Theine is idle. While Theine keeps the Mac
+awake with the lid closed, the new version waits until the mode is turned
+off. With "Install updates
 automatically" turned off in Settings, the icon gets a dot instead, and the
 menu gets a "Version ... is available" item that opens a card with "Later" and
 "Update".

@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds build/Theine.app (universal: Apple Silicon + Intel).
-#   VERSION=1.0.0 ./scripts/build_app.sh
+# Builds build/Theine.app (universal: Apple Silicon + Intel), with the root helper in Contents/Helpers.
+#   VERSION=1.1.0 ./scripts/build_app.sh
 #   ARCHS="arm64" ./scripts/build_app.sh          faster, for this Mac only
 #   SIGN_IDENTITY=- ./scripts/build_app.sh        ad-hoc signature
 #   OUT_DIR=build/release ./scripts/build_app.sh  another place for the bundle (make_dmg.sh uses it)
@@ -15,7 +15,7 @@ cd "$ROOT"
 
 APP_NAME="Theine"
 BUNDLE_ID="${BUNDLE_ID:-com.theine.app}"
-VERSION="${VERSION:-1.0.1}"
+VERSION="${VERSION:-1.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d%H%M)}"
 ARCHS="${ARCHS:-arm64 x86_64}"
 CERT_SHA1="AF82036140843A7D76497EA8E4CD23403C8AEDC2"
@@ -30,20 +30,28 @@ if [ -z "${SIGN_IDENTITY:-}" ]; then
 fi
 APP="${OUT_DIR:-$ROOT/build}/$APP_NAME.app"
 
-# 1. Compile
+# 1. Compile: the app and its helper (TheineHelper, installed as root once the user allows it)
 echo "==> swift build ($ARCHS)"
 ARCH_FLAGS=()
 for arch in $ARCHS; do ARCH_FLAGS+=(--arch "$arch"); done
-swift build -c release "${ARCH_FLAGS[@]}" --product "$APP_NAME" 2>&1 | grep -E "error|warning: unre|Build complete" || true
-BIN="$(swift build -c release "${ARCH_FLAGS[@]}" --product "$APP_NAME" --show-bin-path)/$APP_NAME"
-[ -x "$BIN" ] || { echo "build failed"; exit 1; }
+for product in "$APP_NAME" TheineHelper; do
+    swift build -c release "${ARCH_FLAGS[@]}" --product "$product" 2>&1 | grep -E "error|warning: unre|Build complete" || true
+done
+BIN_DIR="$(swift build -c release "${ARCH_FLAGS[@]}" --product "$APP_NAME" --show-bin-path)"
+BIN="$BIN_DIR/$APP_NAME"
+HELPER_BIN="$BIN_DIR/TheineHelper"
+[ -x "$BIN" ] && [ -x "$HELPER_BIN" ] || { echo "build failed"; exit 1; }
 
 # 2. Bundle
 echo "==> assembling $APP"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/ru.lproj" "$APP/Contents/Resources/en.lproj" "$ROOT/build"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources/ru.lproj" "$APP/Contents/Resources/en.lproj" "$ROOT/build"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 strip -x "$APP/Contents/MacOS/$APP_NAME" 2>/dev/null || true
+# The helper only waits here: Theine copies it to /Library/PrivilegedHelperTools as root, and launchd never runs this copy.
+HELPER="$APP/Contents/Helpers/TheineHelper"
+cp "$HELPER_BIN" "$HELPER"
+strip -x "$HELPER" 2>/dev/null || true
 # SwiftPM writes the deployment target into the SDK field of the binary. macOS reads that field to decide
 # whether the app gets the current design (Liquid Glass on macOS 26 and later), so write the real SDK.
 SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
@@ -104,17 +112,20 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 printf "APPL????" > "$APP/Contents/PkgInfo"
 
-# 3. Sign
+# 3. Sign: the helper first (nested code), then the app. The helper's identifier and certificate are what the install
+# step checks as root before it puts the helper in place, so a copy signed ad hoc can never be installed.
 echo "==> codesign ($SIGN_IDENTITY)"
 xattr -cr "$APP"
 if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - --identifier "$BUNDLE_ID.helper" "$HELPER"
     codesign --force --sign - --identifier "$BUNDLE_ID" "$APP"
 else
     # A secure timestamp is needed for notarization (Developer ID); the self-signed certificate goes without it.
     TIMESTAMP="--timestamp=none"
     [[ "$SIGN_IDENTITY" == Developer\ ID* ]] && TIMESTAMP="--timestamp"
+    codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID.helper" "$HELPER"
     codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP"
 fi
 codesign --verify --deep --strict "$APP"
 echo "==> done: $APP ($(du -sh "$APP" | cut -f1))"
-lipo -info "$APP/Contents/MacOS/$APP_NAME"
+lipo -info "$APP/Contents/MacOS/$APP_NAME" "$HELPER"

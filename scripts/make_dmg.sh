@@ -1,11 +1,11 @@
 #!/bin/bash
 # Builds the app and packs it into dist/Theine-<version>.dmg with the install notes from docs/.
-#   VERSION=1.0.0 ./scripts/make_dmg.sh
+#   VERSION=1.1.0 ./scripts/make_dmg.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-VERSION="${VERSION:-1.0.1}"
+VERSION="${VERSION:-1.1.0}"
 export VERSION
 # Release builds are signed with the family's self-signed certificate "tihomirov-nick": installed copies update
 # themselves only to a version signed by the same certificate. Without it the build is signed ad-hoc and the copies

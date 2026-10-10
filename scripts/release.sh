@@ -73,11 +73,17 @@ CERT_SHA1="af82036140843a7d76497ea8e4cd23403c8aedc2"
 MOUNT="$(mktemp -d /tmp/theine-release.XXXXXX)"
 hdiutil attach "$DMG" -nobrowse -readonly -noautoopen -mountpoint "$MOUNT" >/dev/null
 REQUIREMENT="$(codesign -d -r- "$MOUNT/Theine.app" 2>&1 | tr '[:upper:]' '[:lower:]' || true)"
+# The helper too: Theine installs it as root only when it carries the same certificate.
+HELPER_REQUIREMENT="$(codesign -d -r- "$MOUNT/Theine.app/Contents/Helpers/TheineHelper" 2>&1 | tr '[:upper:]' '[:lower:]' || true)"
 hdiutil detach "$MOUNT" -quiet || hdiutil detach "$MOUNT" -force -quiet
 rmdir "$MOUNT" 2>/dev/null || true
 case "$REQUIREMENT" in
     *"certificate leaf = h\"$CERT_SHA1\""*) echo "==> the app in the DMG is signed by tihomirov-nick" ;;
     *) echo "the app in $DMG is not signed by the certificate tihomirov-nick: installed copies would refuse it; nothing pushed"; exit 1 ;;
+esac
+case "$HELPER_REQUIREMENT" in
+    *"identifier \"com.theine.app.helper\""*"certificate leaf = h\"$CERT_SHA1\""*) echo "==> so is its helper" ;;
+    *) echo "the helper in $DMG is not signed by the certificate tihomirov-nick: Theine would refuse to install it; nothing pushed"; exit 1 ;;
 esac
 
 # 5. Tag and push
