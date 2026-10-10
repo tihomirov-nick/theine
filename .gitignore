@@ -1,0 +1,14 @@
+.build/
+build/
+dist/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+*.dmg
+.DS_Store
+
+# Built from Resources/AppIcon.icon by actool into the app
+Resources/AppIcon.icns
+
+# Promo pictures and texts (not part of the app)
+promo/

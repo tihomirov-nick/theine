@@ -1,0 +1,81 @@
+THEINE
+======
+
+INSTALLING
+Open Theine right from this window. It moves itself to the Applications
+folder and restarts from there. Without administrator rights, Theine goes
+to the Applications folder inside your home folder. Once it runs, its icon
+appears in the menu bar at the top right of the screen.
+
+You can also install Theine by hand. Drag its icon onto the Applications
+folder next to it and launch Theine from the Applications folder.
+
+IF macOS WON'T OPEN THE APP
+The app isn't notarized by Apple, so on the first launch macOS may show
+a warning ("cannot verify the developer" or "Apple could not verify it is free
+of malware"). You only need to allow it once.
+
+  • On macOS 15 and later, close the warning with "Done", open System
+    Settings, go to Privacy & Security, scroll down, click "Open Anyway"
+    next to Theine and confirm.
+
+  • On macOS 14, right-click Theine in Finder, choose "Open", then click
+    "Open" again in the warning.
+
+  • If that didn't help, drag Theine onto the Applications folder, open
+    Terminal and run:
+        xattr -dr com.apple.quarantine /Applications/Theine.app
+
+WHAT THEINE DOES
+Theine keeps your Mac from falling asleep while you are busy: a download, a
+build, a presentation or a long calculation. The cup in the menu bar is empty
+while the Mac may sleep and full while Theine keeps it awake.
+
+THE MENU BAR ICON
+Any click on the icon opens the menu. It has "Turn On" or "Turn Off" (the
+Shift-Command-T label on that item works while the menu is open), a "Keep the display on" checkmark
+and "Turn On For" with "Indefinitely", 5, 15, 30 minutes, 1, 2, 4 and 8 hours. While the mode is on
+and the checkmark is set, the display does not go dark from inactivity; without it the display goes
+dark as usual and the Mac keeps running. The checkmark takes effect at once, also while the mode
+is on. A line under them
+shows the state: "On for 12 min" or "40 min left". Then come Settings, Check
+for Updates, About and Quit.
+
+When the time is up, Theine turns itself off and plays a short sound if sound
+effects are on in Settings. A closed MacBook lid and Sleep in the Apple menu
+still put the Mac to sleep.
+
+SETTINGS
+Settings (Command-,) has two switches for Theine and a row for a shortcut. "Turn off below 20% battery" turns Theine off when the Mac runs
+on battery and the charge falls below 20%, and stops it from turning on at that
+charge until the Mac is plugged in. "Turn on at launch" turns Theine on with no
+time limit at every launch. The "Shortcut for turning on" row records your own
+keys, which must include Command, Control or Option. They turn Theine on and
+off in any app. There is no shortcut by default, so Theine takes no keys from
+other apps.
+
+If Theine restarts by itself, for example to update, the mode carries on with
+the same time. "Quit Theine" in the menu and restarting the Mac turn it off.
+
+LANGUAGE
+Theine works in Russian and English. In Settings (⌘,) choose "Same as
+System", "Русский" or "English". With "Same as System" Theine takes the
+first suitable language from the list in System Settings > General >
+Language & Region. A new language takes effect after a restart, and the
+"Restart" button appears right under the choice.
+
+UPDATES
+Theine looks for a new version on GitHub at launch, every three hours and
+after the Mac wakes up. It downloads a new version by itself, checks its
+signature and installs it when Theine is idle. With "Install updates
+automatically" turned off in Settings, the icon gets a dot instead, and the
+menu gets a "Version ... is available" item that opens a card with "Later" and
+"Update".
+
+OPEN AT LOGIN
+Theine opens at login to install updates on time and, with "Turn on at
+launch", to keep the Mac awake right away. To stop it, turn off "Open at
+login" in Settings.
+
+REQUIREMENTS
+macOS 14 or later, a Mac with Apple Silicon or Intel.
